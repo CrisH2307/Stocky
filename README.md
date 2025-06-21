@@ -131,6 +131,32 @@ POST /api/alerts - Set volatility alerts
 - [ ] Responsive dashboard
 - [ ] Clean, professional UI
 - [ ] Working demo with live data
+      🚀
 
-Good luck with your hackathon! 🚀
 # Stocky
+
+### Setup (python or python3)
+
+# Set up environment
+
+python -m venv venv
+
+# Activate environment
+
+source venv/bin/activate
+
+# Install dependencies
+
+pip install -r requirements.txt
+
+# Test the API (Terminal 1 / Just in case this is a test case)
+
+python test_api.py
+
+# Start the API (Terminal 1)
+
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
+
+# Start the application
+
+python start.py

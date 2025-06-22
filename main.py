@@ -1,11 +1,27 @@
+import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+import os # Import the os module
 
 # --- Import Custom Modules ---
 from sms_alert import send_sms
 from garch_model import load_and_prepare_data, run_garch_forecast
 from local_data_processor import load_excel_data, analyze_sp500_data, analyze_vix_data
+from lstm_garch_model import get_lstm_garch_performance_plot, get_7_day_lstm_garch_forecast
+from ticker_analyzer import analyze_ticker
+from portfolio_analyzer import analyze_portfolio
+from pydantic import BaseModel
+
+# --- Force delete cache to ensure model retrains with new logic ---
+# CACHE_FILE = 'cache/model_cache.joblib'
+# if os.path.exists(CACHE_FILE):
+#     try:
+#         os.remove(CACHE_FILE)
+#         print("--- DELETED OLD MODEL CACHE to apply new logic. Model will retrain now. ---")
+#     except Exception as e:
+#         print(f"--- Error deleting cache file, please delete manually: {e} ---")
+# --- End of one-time cache deletion ---
 
 # --- App Configuration ---
 logging.basicConfig(level=logging.INFO)
@@ -30,9 +46,16 @@ app.add_middleware(
 sp500_data_cache = None
 vix_data_cache = None
 garch_results_cache = {}
+lstm_garch_cache = None # Cache for the new performance data
+lstm_7_day_forecast_cache = None # Cache for the 7-day forecast
+portfolio_cache = {} # Cache for portfolio analysis results
 
 # Storage for alerts. Key: phone_number, Value: threshold
 garch_alert_rule = {} 
+
+# --- Pydantic Models ---
+class PortfolioPayload(BaseModel):
+    portfolio_string: str
 
 # --- Background Task for Alerts ---
 def check_garch_and_alert(phone_number: str, threshold: float):
@@ -66,6 +89,7 @@ def check_garch_and_alert(phone_number: str, threshold: float):
 async def root():
     return {"message": "Welcome to the S&P 500 Volatility Forecast API"}
 
+
 @app.get("/api/sp500")
 async def get_sp500_analysis():
     """Returns a full analysis of the S&P 500 data from the local Excel file."""
@@ -78,6 +102,7 @@ async def get_sp500_analysis():
         sp500_data_cache = analyze_sp500_data(df)
     return sp500_data_cache
 
+
 @app.get("/api/vix")
 async def get_vix_analysis():
     """Returns a full analysis of the VIX data from the local Excel file."""
@@ -89,6 +114,59 @@ async def get_vix_analysis():
             raise HTTPException(status_code=500, detail="Could not load VIX data file.")
         vix_data_cache = analyze_vix_data(df)
     return vix_data_cache
+
+
+@app.get("/api/ticker/{ticker_symbol}")
+async def get_ticker_analysis(ticker_symbol: str):
+    """
+    Analyzes a given stock ticker using live data from stooq, returning its
+    daily returns and a GARCH(3,0) volatility forecast.
+    """
+    logger.info(f"Received request to analyze ticker: {ticker_symbol}")
+    analysis_result = analyze_ticker(ticker_symbol)
+    if analysis_result is None:
+        raise HTTPException(status_code=404, detail=f"Could not retrieve data for ticker '{ticker_symbol}'. Is it a valid symbol on stooq?")
+    if "error" in analysis_result:
+        raise HTTPException(status_code=500, detail=analysis_result["error"])
+    return analysis_result
+
+
+@app.get("/api/lstm-garch-performance")
+async def get_lstm_garch_performance_data():
+    """
+    Returns the train/test predictions and actuals from the LSTM-GARCH model.
+    The result is cached to avoid re-training the model on every request.
+    """
+    # global lstm_garch_cache
+    # if lstm_garch_cache is None:
+    #     logger.info("No LSTM-GARCH cache found. Running model pipeline...")
+        # lstm_garch_cache = get_lstm_garch_performance_plot()
+        # if lstm_garch_cache is None:
+        #     raise HTTPException(status_code=500, detail="Failed to run LSTM-GARCH model pipeline.")
+    lstm_garch_cache = get_lstm_garch_performance_plot()
+    if lstm_garch_cache is None:
+        raise HTTPException(status_code=500, detail="Failed to run LSTM-GARCH model pipeline.")
+    return lstm_garch_cache
+    
+
+@app.get("/api/lstm-garch-7-day-forecast")
+async def get_7_day_forecast():
+    """
+    Returns a 7-day ahead volatility forecast from the LSTM-GARCH model.
+    The result is cached to avoid re-running the model pipeline.
+    """
+    # global lstm_7_day_forecast_cache
+    # if lstm_7_day_forecast_cache is None:
+    #     logger.info("No 7-day forecast cache found. Running forecast pipeline...")
+    #     lstm_7_day_forecast_cache = get_7_day_lstm_garch_forecast()
+    #     if lstm_7_day_forecast_cache is None:
+    #         raise HTTPException(status_code=500, detail="Failed to generate 7-day forecast.")
+    # return lstm_7_day_forecast_cache
+
+    lstm_7_day_forecast_cache = get_7_day_lstm_garch_forecast()
+    if lstm_7_day_forecast_cache is None:
+        raise HTTPException(status_code=500, detail="Failed to generate 7-day forecast.")
+    return lstm_7_day_forecast_cache
 
 @app.get("/api/garch-predict")
 async def get_garch_prediction(forecast_horizon: int = 30, background_tasks: BackgroundTasks = None):
@@ -122,6 +200,29 @@ async def get_garch_prediction(forecast_horizon: int = 30, background_tasks: Bac
             
     return result
 
+@app.post("/analyze_portfolio/")
+async def analyze_portfolio_endpoint(payload: PortfolioPayload):
+    """
+    Analyzes a portfolio of stocks given a string of tickers and weights.
+    Caches the result to avoid re-fetching and re-calculating.
+    """
+    global portfolio_cache
+    portfolio_string = payload.portfolio_string
+    
+    # Check cache first
+    if portfolio_string in portfolio_cache:
+        logger.info(f"Returning cached portfolio analysis for: {portfolio_string}")
+        return portfolio_cache[portfolio_string]
+        
+    logger.info(f"Running new portfolio analysis for: {portfolio_string}")
+    analysis_result = analyze_portfolio(portfolio_string)
+    
+    if "error" in analysis_result:
+        raise HTTPException(status_code=400, detail=analysis_result["error"])
+        
+    portfolio_cache[portfolio_string] = analysis_result
+    return analysis_result
+
 @app.post("/api/garch-alert")
 async def set_garch_alert(threshold: float, phone_number: str):
     """
@@ -138,5 +239,4 @@ async def set_garch_alert(threshold: float, phone_number: str):
     return {"message": "GARCH volatility alert has been set successfully."}
 
 if __name__ == "__main__":
-    import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000) 

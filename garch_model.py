@@ -10,31 +10,25 @@ logger = logging.getLogger(__name__)
 
 def load_and_prepare_data(file_path: str) -> pd.Series:
     """
-    Loads S&P 500 data from an Excel file, calculates log returns, and returns them.
-    
-    Args:
-        file_path (str): The path to the S&P 500 Excel data file.
-
-    Returns:
-        pd.Series: A series of percentage returns, ready for modeling.
+    Loads S&P 500 data from an Excel file, calculates percentage returns, and returns them.
+    This version correctly handles the specific format of the data_SP500.xlsx file.
     """
     try:
+        # This logic correctly reads the excel file by skipping headers,
+        # not by assuming a sheet name.
         df = pd.read_excel(file_path, skiprows=5)
         df.columns = ['Date', 'Close']
         df.dropna(inplace=True)
         df['Date'] = pd.to_datetime(df['Date'])
         df.sort_values('Date', inplace=True)
         df.set_index('Date', inplace=True)
-        
-        # Calculate percentage returns
+
+        # Match the notebook's calculation: 100 * pct_change()
         returns = 100 * df['Close'].pct_change().dropna()
-        logger.info(f"Data loaded successfully. Shape of returns: {returns.shape}")
+        logger.info(f"Data loaded successfully from {file_path}. Shape of returns: {returns.shape}")
         return returns
-    except FileNotFoundError:
-        logger.error(f"Data file not found at {file_path}")
-        return None
     except Exception as e:
-        logger.error(f"An error occurred while loading data: {e}")
+        logger.error(f"An error occurred while loading data from {file_path}: {e}", exc_info=True)
         return None
 
 def run_garch_forecast(returns: pd.Series, forecast_horizon: int = 30) -> Tuple[List[float], List[str]]:

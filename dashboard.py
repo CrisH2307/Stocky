@@ -4,11 +4,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 import pandas as pd
+import numpy as np
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="LSRM-GARCH Volatility Forecast Dashboard",
-    page_icon="📈",
+    page_title="Volatility Forecast Dashboard",
+    page_icon="🔮",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -19,379 +20,466 @@ API_BASE_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
 # --- UI Styling ---
 st.markdown("""
     <style>
-    /* Main app styling */
-    .stApp {
-        background-color: #111111;
-        color: #EAEAEA;
-    }
-    /* Metric cards */
-    .metric-card {
-        background-color: #222222;
-        border-radius: 10px;
-        padding: 20px;
-        text-align: center;
-        border: 1px solid #444444;
-        margin-bottom: 20px;
-    }
-    .metric-card h3 {
-        font-size: 1.2rem;
-        color: #A0A0A0;
-        margin-bottom: 5px;
-    }
-    .metric-card p {
-        font-size: 2.2rem;
-        font-weight: bold;
-        margin: 0;
-    }
-    .metric-card .delta {
-        font-size: 1rem;
-        margin-top: 5px;
-    }
-    /* Section headers */
-    .section-header {
-        border-bottom: 2px solid #444;
-        padding-bottom: 10px;
-        margin-top: 20px;
-        margin-bottom: 20px;
-        font-size: 2rem;
-        font-weight: bold;
-        color: #FAFAFA;
-    }
-    /* Chart styling */
-    .stPlotlyChart {
-        border: 1px solid #333;
-        border-radius: 8px;
-    }
-    /* Sidebar styling */
-    .css-1d391kg {
-        background-color: #1a1a1a;
-    }
+    .stApp { background-color: #111111; color: #EAEAEA; }
+    .metric-card { background-color: #222222; border-radius: 10px; padding: 20px; text-align: center; border: 1px solid #444444; margin-bottom: 20px; }
+    .metric-card h3 { font-size: 1.2rem; color: #A0A0A0; margin-bottom: 5px; }
+    .metric-card p { font-size: 2.2rem; font-weight: bold; margin: 0; }
+    .section-header { border-bottom: 2px solid #444; padding-bottom: 10px; margin-top: 20px; margin-bottom: 20px; font-size: 2rem; font-weight: bold; color: #FAFAFA; }
     </style>
 """, unsafe_allow_html=True)
 
 # --- Helper Functions ---
-def make_api_request(endpoint: str, params: dict = None):
-    """Generic function to make API requests and handle errors."""
+def make_api_request(endpoint: str, method: str = 'GET', json_payload: dict = None):
     try:
-        response = requests.get(f"{API_BASE_URL}{endpoint}", params=params)
+        if method.upper() == 'POST':
+            response = requests.post(f"{API_BASE_URL}{endpoint}", json=json_payload)
+        else:
+            response = requests.get(f"{API_BASE_URL}{endpoint}")
         response.raise_for_status()
         return response.json()
     except requests.exceptions.RequestException as e:
-        st.error(f"Failed to fetch data from API: {e}")
+        detail = "API Error. Is the backend running?"
+        try:
+            detail = e.response.json().get('detail', detail)
+        except (AttributeError, ValueError):
+            pass
+        st.error(f"{detail}")
         return None
 
-def create_metric_card(title, value, delta=None, delta_color="normal", suffix=""):
-    """Creates a styled metric card using HTML."""
-    delta_html = ""
-    if delta is not None:
-        color = "green" if delta >= 0 else "red"
-        arrow = "▲" if delta >= 0 else "▼"
-        delta_html = f'<p class="delta" style="color:{color};">{arrow} {delta:.2f}%</p>'
-    
-    st.markdown(f"""
-        <div class="metric-card">
-            <h3>{title}</h3>
-            <p>{value}{suffix}</p>
-            {delta_html}
-        </div>
-    """, unsafe_allow_html=True)
+def create_metric_card(title, value, suffix=""):
+    st.markdown(f'<div class="metric-card"><h3>{title}</h3><p>{value}{suffix}</p></div>', unsafe_allow_html=True)
 
-def plot_lsrm_garch_forecast(chart_data: dict):
-    """Plots the LSTM-GARCH Volatility Forecast with enhanced styling."""
+# --- Plotting Functions ---
+def plot_sp500_returns(chart_data: dict):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=chart_data['dates'], y=chart_data['returns'], mode='lines', name='Market Returns', line=dict(color='#1f77b4', width=2), fill='tozeroy', fillcolor='rgba(31, 119, 180, 0.1)'))
+    fig.update_layout(title="Market from 2000 - Now", yaxis_title="Returns (%)", template="plotly_dark", height=400, showlegend=False, margin=dict(l=10, r=10, t=60, b=20), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+def plot_7_day_forecast(chart_data: dict):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=chart_data['dates'], y=chart_data['forecast'], mode='lines+markers', name='7-Day Forecast', line=dict(color='#00ff88', width=3), marker=dict(size=8)))
+    fig.update_layout(title="Market 7-Day Volatility Forecast (LSTM-GARCH)", yaxis_title="Predicted Daily Volatility (%)", template="plotly_dark", height=500, margin=dict(l=10, r=10, t=60, b=20), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+def plot_model_performance(chart_data: dict):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=chart_data['train_dates'] + chart_data['test_dates'], y=chart_data['train_actual'] + chart_data['test_actual'], mode='lines', name='Actual Volatility', line=dict(color='red')))
+    fig.add_trace(go.Scatter(x=chart_data['train_dates'], y=chart_data['train_pred'], mode='lines', name='Train Predict (LSTM-GARCH)', line=dict(color='orange', dash='dot')))
+    fig.add_trace(go.Scatter(x=chart_data['test_dates'], y=chart_data['test_pred'], mode='lines', name='Test Predict (LSTM-GARCH)', line=dict(color='blue', dash='dot')))
+    fig.update_layout(title="Market LSTM-GARCH Model Performance", yaxis_title="Daily Volatility (%)", xaxis_title="Date", template="plotly_dark", height=500, showlegend=True, legend=dict(x=0.01, y=0.99), margin=dict(l=10, r=10, t=60, b=20), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+def plot_stock_returns(chart_data: dict):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=chart_data['returns_dates'], y=chart_data['returns_values'], mode='lines', name='Returns', line=dict(color='#1f77b4')))
+    fig.update_layout(title=f"Daily Returns for {chart_data['ticker']}", yaxis_title="Daily Returns (%)", template="plotly_dark", height=500, margin=dict(l=20, r=20, t=60, b=20), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+def plot_stock_volatility(chart_data: dict):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=chart_data['historical_vol_dates'], y=chart_data['historical_vol_values'], mode='lines', name='Historical Volatility', line=dict(color='orange', dash='dot')))
+    fig.add_trace(go.Scatter(x=chart_data['forecast_dates'], y=chart_data['forecast_values'], mode='lines+markers', name='Forecasted Volatility', line=dict(color='blue', dash='dot'), marker=dict(size=6)))
+    fig.update_layout(title=f"Historical Volatility vs Predicted Volatility for {chart_data['ticker']}", yaxis_title="Daily Volatility (%)", template="plotly_dark", height=500, showlegend=True, legend=dict(x=0.01, y=0.99), margin=dict(l=20, r=20, t=60, b=20), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+def plot_stock_forecast_only(chart_data: dict):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=chart_data['forecast_dates'],
+        y=chart_data['forecast_values'],
+        mode='lines+markers', name='Forecasted Volatility',
+        line=dict(color='#2ca02c'), marker=dict(size=8)
+    ))
+    fig.update_layout(
+        title=f"7-Day Daily Implied Volatility for {chart_data['ticker']}",
+        yaxis_title="Predicted Daily Volatility (%)",
+        template="plotly_dark", height=500, showlegend=False,
+        margin=dict(l=20, r=20, t=60, b=20),
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+def plot_portfolio_volatility(chart_data: dict):
+    """Plots the volatility of a portfolio and its individual assets."""
     fig = go.Figure()
     
-    # Main forecast line
-    fig.add_trace(go.Scatter(
-        x=chart_data['dates'], 
-        y=chart_data['predicted_volatility'],
-        mode='lines+markers', 
-        name='LSTM-GARCH Forecast', 
-        line=dict(color='#00ff88', width=3),
-        marker=dict(size=6, color='#00ff88')
-    ))
+    # Define a color sequence
+    colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692', '#B6E880', '#FF97FF', '#FECB52']
     
+    # Plot individual asset volatilities
+    individual_vols = chart_data.get('individual_volatilities', {})
+    for i, (ticker, data) in enumerate(individual_vols.items()):
+        fig.add_trace(go.Scatter(
+            x=data['dates'],
+            y=data['volatility'],
+            mode='lines',
+            name=f'{ticker} Volatility',
+            line=dict(color=colors[i % len(colors)], dash='dot', width=1.5),
+            opacity=0.8
+        ))
+
+    # Plot the combined portfolio volatility
+    portfolio_vol = chart_data.get('portfolio_volatility', {})
+    if portfolio_vol:
+        fig.add_trace(go.Scatter(
+            x=portfolio_vol['dates'],
+            y=portfolio_vol['volatility'],
+            mode='lines',
+            name='Total Portfolio Volatility',
+            line=dict(color='white', width=3)
+        ))
+
     fig.update_layout(
-        title={
-            'text': "LSTM-GARCH Volatility Forecast Model (2000-Present)",
-            'x': 0.5,
-            'xanchor': 'center',
-            'font': {'size': 20, 'color': '#FFFFFF'}
-        },
-        yaxis_title="Predicted Volatility (%)",
-        xaxis_title="Forecast Date",
+        title="Portfolio and Asset Volatility",
+        yaxis_title="Daily Volatility (%)",
         template="plotly_dark",
         height=500,
         showlegend=True,
-        margin=dict(l=10, r=10, t=80, b=20),
+        legend=dict(x=0.01, y=0.99),
+        margin=dict(l=20, r=20, t=60, b=20),
         plot_bgcolor='rgba(0,0,0,0)',
-        paper_bgcolor='rgba(0,0,0,0)',
-        font=dict(color='#FFFFFF'),
-        yaxis=dict(
-            gridcolor='#333333',
-            zerolinecolor='#333333',
-            title_font=dict(size=14)
-        ),
-        xaxis=dict(
-            gridcolor='#333333',
-            zerolinecolor='#333333',
-            title_font=dict(size=14)
-        )
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-def plot_spy_returns(chart_data: dict):
-    """Plots S&P500 Returns over time."""
+def plot_volatility_chart(chart_data, title):
     fig = go.Figure()
+    
+    # Line 1: Historical Volatility
     fig.add_trace(go.Scatter(
-        x=chart_data['dates'], 
-        y=chart_data['returns'],
-        mode='lines', 
-        name='S&P500 Returns', 
-        line=dict(color='#1f77b4', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(31, 119, 180, 0.1)'
+        x=chart_data.get('historical_vol_dates'), 
+        y=chart_data.get('historical_vol_values'),
+        mode='lines', name='Historical Volatility',
+        line=dict(color='rgba(255, 255, 255, 0.6)', dash='dot')
     ))
+    
+    # Line 2: In-Sample (Training) Predicted Volatility
+    fig.add_trace(go.Scatter(
+        x=chart_data.get('train_vol_dates'), 
+        y=chart_data.get('train_vol_values'),
+        mode='lines', name='Train Predict (LSTM-GARCH)',
+        line=dict(color='#00CC96') # Green
+    ))
+    
+    # Line 3: Out-of-Sample (Testing) Predicted Volatility
+    fig.add_trace(go.Scatter(
+        x=chart_data.get('test_vol_dates'), 
+        y=chart_data.get('test_vol_values'),
+        mode='lines', name='Test Predict (LSTM-GARCH)',
+        line=dict(color='#EF553B') # Red
+    ))
+
     fig.update_layout(
-        title="S&P500 Returns Over Time (2000-Present)",
-        yaxis_title="Returns (%)",
-        template="plotly_dark",
-        height=400,
-        showlegend=False,
-        margin=dict(l=10, r=10, t=60, b=20)
+        title=title,
+        yaxis_title="Daily Volatility (%)",
+        template="plotly_dark", height=500,
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-def plot_sp500_volatility(chart_data: dict):
-    """Plots S&P500 Volatility over time."""
+def plot_forecast_chart(chart_data, title, y_axis_title="Predicted Daily Volatility (%)"):
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=chart_data['dates'], 
-        y=chart_data['volatility'],
-        mode='lines', 
-        name='S&P500 Volatility', 
-        line=dict(color='#ff7f0e', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(255, 127, 14, 0.1)'
+        y=chart_data['volatility'], 
+        mode='lines+markers',
+        name='7-Day Forecast'
     ))
     fig.update_layout(
-        title="S&P500 Volatility Over Time (2000-Present)",
-        yaxis_title="Annualized Volatility (%)",
+        title=title,
+        yaxis_title=y_axis_title,
         template="plotly_dark",
         height=400,
-        showlegend=False,
-        margin=dict(l=10, r=10, t=60, b=20)
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)'
     )
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
-def plot_vix_overtime(chart_data: dict):
-    """Plots VIX over time."""
+def plot_portfolio_forecast(chart_data: dict):
+    """Plots the 7-day volatility forecast for a portfolio and its assets."""
     fig = go.Figure()
-    fig.add_trace(go.Scatter(
-        x=chart_data['dates'], 
-        y=chart_data['prices'],
-        mode='lines', 
-        name='VIX Index', 
-        line=dict(color='#d62728', width=2),
-        fill='tozeroy',
-        fillcolor='rgba(214, 39, 40, 0.1)'
-    ))
+    
+    colors = ['#636EFA', '#EF553B', '#00CC96', '#AB63FA', '#FFA15A', '#19D3F3', '#FF6692']
+    
+    individual_forecasts = chart_data.get('individual_forecasts', {})
+    if individual_forecasts:
+        for i, (ticker, data) in enumerate(individual_forecasts.items()):
+            fig.add_trace(go.Scatter(
+                x=data.get('dates'), 
+                y=data.get('volatility'), 
+                mode='lines',
+                name=f'{ticker} Forecast', 
+                line=dict(color=colors[i % len(colors)], dash='dot')
+            ))
+
+    portfolio_forecast = chart_data.get('portfolio_forecast', {})
+    if portfolio_forecast and portfolio_forecast.get('dates'):
+        fig.add_trace(go.Scatter(
+            x=portfolio_forecast.get('dates'), 
+            y=portfolio_forecast.get('volatility'),
+            mode='lines+markers', name='Total Portfolio Forecast',
+            line=dict(color='white', width=3), marker=dict(size=8)
+        ))
+
     fig.update_layout(
-        title="VIX Index Over Time (2000-Present)",
-        yaxis_title="VIX Level",
-        template="plotly_dark",
-        height=400,
-        showlegend=False,
-        margin=dict(l=10, r=10, t=60, b=20)
+        yaxis_title="Predicted Daily Volatility (%)",
+        template="plotly_dark", height=500, showlegend=True,
+        legend=dict(x=0.01, y=0.99), margin=dict(l=20, r=20, t=60, b=20),
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)'
+    )
+    st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
+
+def plot_market_volatility(chart_data):
+    """Plots the market volatility (actual vs. predicted)."""
+    fig = go.Figure()
+    
+    # Actual Volatility
+    fig.add_trace(go.Scatter(
+        x=chart_data.get('dates'), 
+        y=chart_data.get('actual_vol'),
+        mode='lines', name='Actual Volatility',
+        line=dict(color='#EF553B') # Red, solid
+    ))
+    
+    # Train Predict
+    fig.add_trace(go.Scatter(
+        x=chart_data.get('train_dates'), 
+        y=chart_data.get('train_pred'),
+        mode='lines', name='Train Predict (LSTM-GARCH)',
+        line=dict(color='orange', dash='dot')
+    ))
+
+    # Test Predict
+    fig.add_trace(go.Scatter(
+        x=chart_data.get('test_dates'), 
+        y=chart_data.get('test_pred'),
+        mode='lines', name='Test Predict (LSTM-GARCH)',
+        line=dict(color='#636EFA', dash='dot') # Blue, dotted
+    ))
+
+    fig.update_layout(
+        title="Market LSTM-GARCH Model Performance",
+        yaxis_title="Daily Volatility (%)",
+        template="plotly_dark", height=500,
+        plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)',
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 # --- Sidebar Navigation ---
-st.sidebar.title("📊 Market Analysis")
+st.sidebar.title("Analysis Dashboard")
 st.sidebar.markdown("---")
 
-# Sidebar tabs for different analyses
-analysis_type = st.sidebar.selectbox(
-    "Select Analysis:",
-    ["S&P500 Returns",  "S&P500 Volatility", "LSTM-GARCH Forecast"]
+# --- Main App ---
+st.title("Analysis Dashboard")
+
+analysis_mode = st.sidebar.selectbox(
+    "Select Analysis Mode:",
+    ["Market Analysis", "Stock Analysis", "Portfolio Analysis"],
+    key='analysis_mode_selector'
 )
-
-# --- Main App Layout ---
-if analysis_type == "S&P500 Returns":
-    st.title("📈 S&P500 Returns Analysis (2000-Present)")
-    st.markdown("---")
-    
-    # Get SP500 data (we'll use this for S&P500 Returns)
-    sp500_data = make_api_request("/api/sp500")
-    if sp500_data:
-        # Calculate returns from prices
-        prices = sp500_data['chart_data']['prices']
-        returns = []
-        for i in range(1, len(prices)):
-            ret = ((prices[i] - prices[i-1]) / prices[i-1]) * 100
-            returns.append(ret)
-        
-        # Create returns chart data
-        returns_data = {
-            'dates': sp500_data['chart_data']['dates'][1:],
-            'returns': returns
-        }
-        
-        plot_spy_returns(returns_data)
-        
-        # Statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            avg_return = sum(returns) / len(returns) if returns else 0
-            create_metric_card("Average Daily Return", f"{avg_return:.3f}", suffix="%")
-        with col2:
-            max_return = max(returns) if returns else 0
-            create_metric_card("Maximum Daily Return", f"{max_return:.2f}", suffix="%")
-        with col3:
-            min_return = min(returns) if returns else 0
-            create_metric_card("Minimum Daily Return", f"{min_return:.2f}", suffix="%")
-    else:
-        st.error("Could not load SPY returns data.")
-
-elif analysis_type == "LSTM-GARCH Forecast":
-    # Main LSRM-GARCH Model Section
-    st.title("🔮 LSTM-GARCH Volatility Forecast Model")
-    st.markdown("### Advanced Machine Learning Model for S&P 500 Volatility Prediction")
-    st.markdown("---")
-    
-    # Model description
-    st.markdown("""
-    <div style='background-color: #222222; padding: 20px; border-radius: 10px; border: 1px solid #444444;'>
-        <h4>Model Overview</h4>
-        <p>Our LSRM-GARCH (Long Short-Range Memory - Generalized Autoregressive Conditional Heteroskedasticity) 
-        model combines the power of deep learning with traditional econometric techniques to provide 
-        highly accurate volatility forecasts for the S&P 500 index.</p>
-    </div>
-    """, unsafe_allow_html=True)
-    
-    # Forecast controls
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        forecast_days = st.slider(
-            "Forecast Horizon (Days):", 
-            min_value=5, max_value=90, value=30, step=5
-        )
-    with col2:
-        st.markdown("<br>", unsafe_allow_html=True)
-        if st.button("🔄 Refresh Forecast", type="primary"):
-            st.rerun()
-    
-    # Get GARCH forecast data
-    with st.spinner("Running LSRM-GARCH forecast..."):
-        garch_data = make_api_request("/api/garch-predict", params={"forecast_horizon": forecast_days})
-    
-    if garch_data:
-        # Key metrics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            latest_vol = garch_data['predicted_volatility'][0] if garch_data['predicted_volatility'] else 0
-            create_metric_card("Next Day Forecast", f"{latest_vol:.2f}", suffix="%")
-        with col2:
-            avg_vol = sum(garch_data['predicted_volatility']) / len(garch_data['predicted_volatility']) if garch_data['predicted_volatility'] else 0
-            create_metric_card("Average Forecast", f"{avg_vol:.2f}", suffix="%")
-        with col3:
-            max_vol = max(garch_data['predicted_volatility']) if garch_data['predicted_volatility'] else 0
-            create_metric_card("Peak Forecast", f"{max_vol:.2f}", suffix="%")
-        
-        # Main forecast chart
-        plot_lsrm_garch_forecast(garch_data)
-        
-        # Forecast details
-        st.markdown("### Forecast Details")
-        df = pd.DataFrame({
-            'Date': garch_data['dates'],
-            'Predicted Volatility (%)': [f"{x:.4f}" for x in garch_data['predicted_volatility']]
-        })
-        st.dataframe(df, use_container_width=True, hide_index=True)
-        
-    else:
-        st.error("Could not retrieve LSRM-GARCH forecast. Please check the backend connection.")
-
-
-elif analysis_type == "S&P500 Volatility":
-    st.title("📊 S&P500 Volatility Analysis (2000-Present)")
-    st.markdown("---")
-    
-    sp500_data = make_api_request("/api/sp500")
-    if sp500_data:
-        plot_sp500_volatility(sp500_data['chart_data'])
-        
-        # Volatility statistics
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            current_vol = sp500_data['latest_volatility']
-            create_metric_card("Current Volatility", f"{current_vol:.2f}", suffix="%")
-        with col2:
-            avg_vol = sum(sp500_data['chart_data']['volatility']) / len(sp500_data['chart_data']['volatility'])
-            create_metric_card("Average Volatility", f"{avg_vol:.2f}", suffix="%")
-        with col3:
-            max_vol = max(sp500_data['chart_data']['volatility'])
-            create_metric_card("Peak Volatility", f"{max_vol:.2f}", suffix="%")
-    else:
-        st.error("Could not load S&P 500 volatility data.")
-
-# elif analysis_type == "VIX Analysis":
-#     st.title("😰 VIX Fear Index Analysis (2000-Present)")
-#     st.markdown("---")
-    
-#     vix_data = make_api_request("/api/vix")
-#     if vix_data:
-#         plot_vix_overtime(vix_data['chart_data'])
-        
-#         # VIX statistics
-#         col1, col2, col3 = st.columns(3)
-#         with col1:
-#             current_vix = vix_data['latest_price']
-#             create_metric_card("Current VIX", f"{current_vix:.2f}")
-#         with col2:
-#             avg_vix = sum(vix_data['chart_data']['prices']) / len(vix_data['chart_data']['prices'])
-#             create_metric_card("Average VIX", f"{avg_vix:.2f}")
-#         with col3:
-#             max_vix = max(vix_data['chart_data']['prices'])
-#             create_metric_card("Peak VIX", f"{max_vix:.2f}")
-            
-#         # VIX interpretation
-#         st.markdown("### VIX Interpretation")
-#         if current_vix < 15:
-#             st.success("🟢 Low Volatility: Market is calm and stable")
-#         elif current_vix < 25:
-#             st.info("🟡 Moderate Volatility: Normal market conditions")
-#         elif current_vix < 35:
-#             st.warning("🟠 High Volatility: Increased market stress")
-#         else:
-#             st.error("🔴 Extreme Volatility: Market panic/fear")
-#     else:
-#         st.error("Could not load VIX data.")
-
-# --- SMS Alert Section (always visible) ---
 st.sidebar.markdown("---")
-st.sidebar.title("🚨 Volatility Alerts")
-st.sidebar.write("Get notified when LSRM-GARCH predicts high volatility")
 
+# Based on selection, show different views
+if analysis_mode == "Market Analysis":
+    st.header("S&P 500 Market Analysis")
+
+    # Automatically load data if it's not already in the session state
+    if 'market_data_loaded' not in st.session_state:
+        with st.spinner("Loading market analysis data... This is a one-time load."):
+            st.session_state.market_volatility_data = make_api_request("/api/lstm-garch-performance")
+            st.session_state.market_returns_data = make_api_request("/api/sp500")
+            st.session_state.market_forecast_data = make_api_request("/api/lstm-garch-7-day-forecast")
+            st.session_state.market_data_loaded = True
+
+    view_option = st.selectbox("Select View:", ["Returns", "Volatility", "Implied Volatility"], key='market_view_selector')
+
+    if view_option == "Returns":
+        st.markdown("### Daily Returns")
+        sp500_data = st.session_state.get('market_returns_data')
+        if sp500_data and not sp500_data.get("error"):
+            prices = sp500_data['chart_data']['prices']
+            returns = [((prices[i] - prices[i-1]) / prices[i-1]) * 100 for i in range(1, len(prices))]
+            returns_data = {'dates': sp500_data['chart_data']['dates'][1:], 'returns': returns}
+            plot_sp500_returns(returns_data)
+            st.markdown("### Key Return Metrics")
+            col1, col2, col3 = st.columns(3)
+            avg_return = np.mean(returns) if returns else 0
+            max_return = max(returns) if returns else 0
+            min_return = min(returns) if returns else 0
+            with col1: create_metric_card("Average Daily Return", f"{avg_return:.3f}", suffix="%")
+            with col2: create_metric_card("Max Daily Return", f"{max_return:.2f}", suffix="%")
+            with col3: create_metric_card("Min Daily Return", f"{min_return:.2f}", suffix="%")
+        else:
+            st.warning("Could not load market returns data.")
+
+    elif view_option == "Volatility":
+        st.subheader("Market LSTM-GARCH Model Performance")
+        data = st.session_state.get('market_volatility_data')
+        if data and not data.get("error"):
+            plot_model_performance(data)
+            st.markdown("### Error Performance Metrics")
+            col1, col2, col3 = st.columns(3)
+            y_true = np.array(data['test_actual'])
+            y_pred = np.array(data['test_pred'])
+            test_mae = np.mean(np.abs(y_true - y_pred))
+            test_rmse = np.sqrt(np.mean((y_true - y_pred)**2))
+            with col1: create_metric_card("Train & Test Split", "80/20")
+            with col2: create_metric_card("Mean Absolute Error (MAE)", f"{test_mae:.3f}")
+            with col3: create_metric_card("Root Mean Squared Error (RMSE)", f"{test_rmse:.3f}")
+        elif data and data.get("error"):
+            st.error(data["error"])
+        else:
+            st.warning("Could not load market volatility data.")
+
+    elif view_option == "Implied Volatility":
+        st.subheader("7-Day Volatility Implied Volatility")
+        forecast_data = st.session_state.get('market_forecast_data')
+        if forecast_data and not forecast_data.get("error"):
+            plot_7_day_forecast(forecast_data)
+            st.markdown("### Forecast Values")
+            df_forecast = pd.DataFrame({
+                'Date': forecast_data['dates'],
+                'Predicted Daily Volatility (%)': [f"{x:.6f}" for x in forecast_data['forecast']]
+            })
+            st.dataframe(df_forecast, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Could not load market forecast data.")
+
+elif analysis_mode == "Stock Analysis":
+    st.header("Custom Stock Analysis")
+    st.markdown("### Analyze any stock ticker using live data from `stooq`.")
+    
+    with st.form(key='stock_form'):
+        ticker_symbol = st.text_input("Enter Stock Ticker:", "DIS").upper()
+        analyze_button = st.form_submit_button(label='Analyze')
+
+    if analyze_button and ticker_symbol:
+        with st.spinner(f"Fetching data from stooq for {ticker_symbol}..."):
+            st.session_state['stock_analysis_data'] = make_api_request(f"/api/ticker/{ticker_symbol}")
+            st.session_state['last_analyzed_stock'] = ticker_symbol
+    
+    if 'stock_analysis_data' in st.session_state and st.session_state.get('stock_analysis_data'):
+        st.markdown(f"---")
+        st.markdown(f"### Showing analysis for **{st.session_state['last_analyzed_stock']}**")
+        view_option = st.selectbox("Select View:", ["Returns", "Volatility", "Implied Volatility"], key='stock_view')
+        data = st.session_state['stock_analysis_data']
+
+        if view_option == "Returns":
+            plot_stock_returns(data)
+        
+        elif view_option == "Volatility":
+            plot_volatility_chart(data, f"Historical vs. Predicted Volatility for {ticker_symbol}")
+
+        elif view_option == "Implied Volatility":
+            plot_stock_forecast_only(data)
+            df_forecast = pd.DataFrame({
+                'Date': data['forecast_dates'],
+                'Predicted Daily Volatility (%)': [f"{x:.6f}" for x in data['forecast_values']]
+            })
+            st.dataframe(df_forecast, use_container_width=True, hide_index=True)
+    else:
+        st.info("Enter a stock ticker and click 'Analyze'.")
+
+elif analysis_mode == "Portfolio Analysis":
+    st.title("Portfolio Performance Analysis")
+    st.markdown("### Build your portfolio and analyze its historical performance.")
+
+    if 'portfolio_items' not in st.session_state:
+        st.session_state.portfolio_items = [
+            {'ticker': 'AAPL', 'weight': 0.5},
+            {'ticker': 'GOOG', 'weight': 0.3},
+            {'ticker': 'DIS', 'weight': 0.2}
+        ]
+
+    st.markdown("#### Add Stock to Portfolio")
+    with st.form("add_stock_form", clear_on_submit=True):
+        col1, col2 = st.columns([2, 1])
+        ticker = col1.text_input("Ticker Symbol").upper()
+        weight = col2.number_input("Weight", min_value=0.01, max_value=1.0, step=0.05, format="%.2f")
+        
+        if st.form_submit_button("Add Stock"):
+            if ticker and not any(p['ticker'] == ticker for p in st.session_state.portfolio_items):
+                st.session_state.portfolio_items.append({'ticker': ticker, 'weight': weight})
+            elif ticker:
+                st.warning(f"Ticker {ticker} is already in the portfolio.")
+
+    st.markdown("---")
+    st.markdown("#### Current Portfolio")
+    
+    total_weight = sum(p['weight'] for p in st.session_state.portfolio_items)
+    
+    c1, c2, c3 = st.columns([2, 1, 1])
+    c1.write("**Ticker**")
+    c2.write("**Weight**")
+    
+    for i, item in enumerate(st.session_state.portfolio_items):
+        col1, col2, col3 = st.columns([2, 1, 1])
+        col1.write(item['ticker'])
+        col2.write(f"{item['weight']:.2f}")
+        if col3.button("Remove", key=f"remove_{i}"):
+            st.session_state.portfolio_items.pop(i)
+            st.rerun()
+
+    st.metric("Total Weight", f"{total_weight:.2f}")
+    if not (0.99 <= total_weight <= 1.01):
+        st.error("Portfolio weights must sum to 1.0 for a valid analysis.")
+    
+    # Simple button to trigger analysis from the list above
+    if st.button("Analyze Portfolio", disabled=not (0.99 <= total_weight <= 1.01)):
+        portfolio_string = ", ".join([f"{p['ticker']} {p['weight']}" for p in st.session_state.portfolio_items])
+        
+        # Clear old data before making a new request
+        if 'portfolio_data' in st.session_state:
+            del st.session_state['portfolio_data']
+            
+        with st.spinner("Analyzing portfolio forecast..."):
+            response = requests.post(f"{API_BASE_URL}/analyze_portfolio/", json={"portfolio_string": portfolio_string})
+            if response.status_code == 200:
+                st.session_state['portfolio_data'] = response.json()
+            else:
+                st.error(f"Error from API: {response.text}")
+
+    if 'portfolio_data' in st.session_state and st.session_state.get('portfolio_data'):
+        data = st.session_state['portfolio_data']
+        if "error" in data:
+            st.error(data["error"])
+            del st.session_state['portfolio_data']
+        elif data.get('portfolio_forecast'):
+            st.markdown("### Portfolio and Asset Implied Volatility")
+            plot_portfolio_forecast(data)
+            
+            st.markdown("### Portfolio 7-Day Implied Volatility Data")
+            portfolio_forecast_data = data.get('portfolio_forecast', {})
+            if portfolio_forecast_data.get('dates'):
+                df_vol = pd.DataFrame({
+                    'Date': portfolio_forecast_data.get('dates', []),
+                    'Predicted Portfolio Volatility (%)': [f"{v:.4f}" if v is not None else "N/A" for v in portfolio_forecast_data.get('volatility', [])]
+                })
+                st.dataframe(df_vol, use_container_width=True, height=300, hide_index=True)
+    else:
+        st.info("Build a portfolio with a total weight of 1.0, then click 'Analyze'.")
+
+# --- Sidebar for Alerts ---
+st.sidebar.title("Volatility Alerts")
+st.sidebar.write("Get notified when the Market model predicts high volatility.")
 with st.sidebar.form("alert_form"):
     phone_number = st.text_input("Phone Number", placeholder="+14155552671")
-    threshold = st.number_input("Alert Threshold (%)", min_value=0.1, value=2.5, step=0.1)
+    threshold = st.number_input("Alert Threshold (%) for Market Forecast", min_value=0.1, value=1.5, step=0.1)
     submit_button = st.form_submit_button(label='Set Alert')
-
     if submit_button:
         if not phone_number or not threshold:
-            st.sidebar.error("Please enter valid phone number and threshold.")
+            st.sidebar.error("Please enter a valid phone number and threshold.")
         else:
             payload = {"phone_number": phone_number, "threshold": threshold}
-            try:
-                response = requests.post(f"{API_BASE_URL}/api/garch-alert", params=payload)
-                response.raise_for_status()
-                st.sidebar.success(f"✅ Alert set for {threshold}% threshold")
-            except requests.exceptions.RequestException as e:
-                error_detail = str(e)
-                if e.response is not None:
-                    error_detail = e.response.json().get('detail', error_detail)
-                st.sidebar.error(f"Failed to set alert: {error_detail}")
+            response = requests.post(f"{API_BASE_URL}/api/garch-alert", params=payload)
+            if response and response.status_code == 200:
+                st.sidebar.success(f"Alert set for {threshold}% threshold")
+            else:
+                error = (response.json() or {}).get('detail', 'Unknown error')
+                st.sidebar.error(f"Failed to set alert: {error}")
 
-# --- Footer ---
 st.markdown("---")
-st.markdown("<div style='text-align: center; color: #777;'>LSRM-GARCH Volatility Forecast Dashboard | Professional Financial Analytics</div>", unsafe_allow_html=True) 
+st.markdown("<div style='text-align: center; color: #777;'>Volatility Forecast Dashboard | Professional Financial Analytics</div>", unsafe_allow_html=True)

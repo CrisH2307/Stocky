@@ -1,8 +1,12 @@
+import sys
 import uvicorn
 from fastapi import FastAPI, HTTPException, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 import logging
 import os # Import the os module
+import subprocess
+import time
+import webbrowser
 
 # --- Import Custom Modules ---
 from sms_alert import send_sms
@@ -239,4 +243,23 @@ async def set_garch_alert(threshold: float, phone_number: str):
     return {"message": "GARCH volatility alert has been set successfully."}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+        # Start FastAPI backend
+    backend = subprocess.Popen([sys.executable, "-m", "uvicorn", "main:app", "--reload"])
+
+    # Wait a bit to ensure backend is up
+    time.sleep(2)
+
+    # Start Streamlit frontend
+    frontend = subprocess.Popen([sys.executable, "-m", "streamlit", "run", "dashboard.py"])
+
+    # Optionally, open the Streamlit app in the browser
+    # time.sleep(2)
+    # webbrowser.open("http://localhost:8501")
+
+    # Wait for both processes to finish
+    try:
+        backend.wait()
+        frontend.wait()
+    except KeyboardInterrupt:
+        backend.terminate()
+        frontend.terminate()

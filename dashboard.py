@@ -1,10 +1,18 @@
 import streamlit as st
-import requests
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import os
 import pandas as pd
 import numpy as np
+import logging
+
+# Import the backend modules directly
+from sms_alert import send_sms
+from garch_model import load_and_prepare_data, run_garch_forecast
+from local_data_processor import load_excel_data, analyze_sp500_data, analyze_vix_data
+from lstm_garch_model import get_lstm_garch_performance_plot, get_7_day_lstm_garch_forecast
+from ticker_analyzer import analyze_ticker
+from portfolio_analyzer import analyze_portfolio
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -14,8 +22,9 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- API Configuration ---
-API_BASE_URL = os.getenv("API_URL", "http://127.0.0.1:8000")
+# --- Logging Setup ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- UI Styling ---
 st.markdown("""
@@ -29,25 +38,112 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- Helper Functions ---
-def make_api_request(endpoint: str, method: str = 'GET', json_payload: dict = None):
-    try:
-        if method.upper() == 'POST':
-            response = requests.post(f"{API_BASE_URL}{endpoint}", json=json_payload)
-        else:
-            response = requests.get(f"{API_BASE_URL}{endpoint}")
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        detail = "API Error. Is the backend running?"
-        try:
-            detail = e.response.json().get('detail', detail)
-        except (AttributeError, ValueError):
-            pass
-        st.error(f"{detail}")
-        return None
-
 def create_metric_card(title, value, suffix=""):
     st.markdown(f'<div class="metric-card"><h3>{title}</h3><p>{value}{suffix}</p></div>', unsafe_allow_html=True)
+
+# --- Backend Integration Functions ---
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_sp500_analysis():
+    """Returns a full analysis of the S&P 500 data from the local Excel file."""
+    try:
+        df = load_excel_data('data/data_SP500.xlsx', 'S&P 500')
+        if df is None:
+            return {"error": "Could not load S&P 500 data file."}
+        return analyze_sp500_data(df)
+    except Exception as e:
+        logger.error(f"Error in S&P 500 analysis: {e}")
+        return {"error": f"Error analyzing S&P 500 data: {str(e)}"}
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_vix_analysis():
+    """Returns a full analysis of the VIX data from the local Excel file."""
+    try:
+        df = load_excel_data('data/data_VIX.xlsx', 'VIX')
+        if df is None:
+            return {"error": "Could not load VIX data file."}
+        return analyze_vix_data(df)
+    except Exception as e:
+        logger.error(f"Error in VIX analysis: {e}")
+        return {"error": f"Error analyzing VIX data: {str(e)}"}
+
+@st.cache_data(ttl=1800)  # Cache for 30 minutes
+def get_ticker_analysis(ticker_symbol: str):
+    """Analyzes a given stock ticker using live data from stooq."""
+    try:
+        analysis_result = analyze_ticker(ticker_symbol)
+        if analysis_result is None:
+            return {"error": f"Could not retrieve data for ticker '{ticker_symbol}'. Is it a valid symbol on stooq?"}
+        return analysis_result
+    except Exception as e:
+        logger.error(f"Error in ticker analysis: {e}")
+        return {"error": f"Error analyzing ticker {ticker_symbol}: {str(e)}"}
+
+@st.cache_data(ttl=7200)  # Cache for 2 hours
+def get_lstm_garch_performance_data():
+    """Returns the train/test predictions and actuals from the LSTM-GARCH model."""
+    try:
+        result = get_lstm_garch_performance_plot()
+        if result is None:
+            return {"error": "Failed to run LSTM-GARCH model pipeline."}
+        return result
+    except Exception as e:
+        logger.error(f"Error in LSTM-GARCH performance: {e}")
+        return {"error": f"Error running LSTM-GARCH model: {str(e)}"}
+
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def get_7_day_forecast():
+    """Returns a 7-day ahead volatility forecast from the LSTM-GARCH model."""
+    try:
+        result = get_7_day_lstm_garch_forecast()
+        if result is None:
+            return {"error": "Failed to generate 7-day forecast."}
+        return result
+    except Exception as e:
+        logger.error(f"Error in 7-day forecast: {e}")
+        return {"error": f"Error generating 7-day forecast: {str(e)}"}
+
+@st.cache_data(ttl=1800)  # Cache for 30 minutes
+def get_garch_prediction(forecast_horizon: int = 30):
+    """Runs the GARCH(2,2) rolling forecast."""
+    try:
+        returns = load_and_prepare_data('data/data_SP500.xlsx')
+        if returns is None:
+            return {"error": "Failed to load data for GARCH model."}
+        
+        predictions, dates = run_garch_forecast(returns, forecast_horizon=forecast_horizon)
+        if not predictions:
+            return {"error": "GARCH model failed to generate a forecast."}
+        
+        return {"dates": dates, "predicted_volatility": predictions}
+    except Exception as e:
+        logger.error(f"Error in GARCH prediction: {e}")
+        return {"error": f"Error running GARCH model: {str(e)}"}
+
+@st.cache_data(ttl=1800)  # Cache for 30 minutes
+def analyze_portfolio_data(portfolio_string: str):
+    """Analyzes a portfolio of stocks given a string of tickers and weights."""
+    try:
+        analysis_result = analyze_portfolio(portfolio_string)
+        if "error" in analysis_result:
+            return {"error": analysis_result["error"]}
+        return analysis_result
+    except Exception as e:
+        logger.error(f"Error in portfolio analysis: {e}")
+        return {"error": f"Error analyzing portfolio: {str(e)}"}
+
+def set_garch_alert(threshold: float, phone_number: str):
+    """Sets a volatility alert (simplified version for Streamlit)."""
+    try:
+        # For Streamlit, we'll just store the alert in session state
+        # In a real implementation, you might want to use a database or external service
+        st.session_state['garch_alert'] = {
+            "phone_number": phone_number,
+            "threshold": threshold
+        }
+        return {"message": "GARCH volatility alert has been set successfully."}
+    except Exception as e:
+        logger.error(f"Error setting GARCH alert: {e}")
+        return {"error": f"Error setting alert: {str(e)}"}
 
 # --- Plotting Functions ---
 def plot_sp500_returns(chart_data: dict):
@@ -289,9 +385,9 @@ if analysis_mode == "Market Analysis":
     # Automatically load data if it's not already in the session state
     if 'market_data_loaded' not in st.session_state:
         with st.spinner("Loading market analysis data... This is a one-time load."):
-            st.session_state.market_volatility_data = make_api_request("/api/lstm-garch-performance")
-            st.session_state.market_returns_data = make_api_request("/api/sp500")
-            st.session_state.market_forecast_data = make_api_request("/api/lstm-garch-7-day-forecast")
+            st.session_state.market_volatility_data = get_lstm_garch_performance_data()
+            st.session_state.market_returns_data = get_sp500_analysis()
+            st.session_state.market_forecast_data = get_7_day_forecast()
             st.session_state.market_data_loaded = True
 
     view_option = st.selectbox("Select View:", ["Returns", "Volatility", "Implied Volatility"], key='market_view_selector')
@@ -358,7 +454,7 @@ elif analysis_mode == "Stock Analysis":
 
     if analyze_button and ticker_symbol:
         with st.spinner(f"Fetching data from stooq for {ticker_symbol}..."):
-            st.session_state['stock_analysis_data'] = make_api_request(f"/api/ticker/{ticker_symbol}")
+            st.session_state['stock_analysis_data'] = get_ticker_analysis(ticker_symbol)
             st.session_state['last_analyzed_stock'] = ticker_symbol
     
     if 'stock_analysis_data' in st.session_state and st.session_state.get('stock_analysis_data'):
@@ -436,11 +532,7 @@ elif analysis_mode == "Portfolio Analysis":
             del st.session_state['portfolio_data']
             
         with st.spinner("Analyzing portfolio forecast..."):
-            response = requests.post(f"{API_BASE_URL}/analyze_portfolio/", json={"portfolio_string": portfolio_string})
-            if response.status_code == 200:
-                st.session_state['portfolio_data'] = response.json()
-            else:
-                st.error(f"Error from API: {response.text}")
+            st.session_state['portfolio_data'] = analyze_portfolio_data(portfolio_string)
 
     if 'portfolio_data' in st.session_state and st.session_state.get('portfolio_data'):
         data = st.session_state['portfolio_data']
@@ -473,13 +565,11 @@ with st.sidebar.form("alert_form"):
         if not phone_number or not threshold:
             st.sidebar.error("Please enter a valid phone number and threshold.")
         else:
-            payload = {"phone_number": phone_number, "threshold": threshold}
-            response = requests.post(f"{API_BASE_URL}/api/garch-alert", params=payload)
-            if response and response.status_code == 200:
+            result = set_garch_alert(threshold, phone_number)
+            if "error" not in result:
                 st.sidebar.success(f"Alert set for {threshold}% threshold")
             else:
-                error = (response.json() or {}).get('detail', 'Unknown error')
-                st.sidebar.error(f"Failed to set alert: {error}")
+                st.sidebar.error(f"Failed to set alert: {result['error']}")
 
 st.markdown("---")
 st.markdown("<div style='text-align: center; color: #777;'>Volatility Forecast Dashboard | Professional Financial Analytics</div>", unsafe_allow_html=True)

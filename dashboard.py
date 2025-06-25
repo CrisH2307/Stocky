@@ -6,14 +6,6 @@ import pandas as pd
 import numpy as np
 import logging
 
-# Import the backend modules directly
-from sms_alert import send_sms
-from garch_model import load_and_prepare_data, run_garch_forecast
-from local_data_processor import load_excel_data, analyze_sp500_data, analyze_vix_data
-from lstm_garch_model import get_lstm_garch_performance_plot, get_7_day_lstm_garch_forecast
-from ticker_analyzer import analyze_ticker
-from portfolio_analyzer import analyze_portfolio
-
 # --- Page Configuration ---
 st.set_page_config(
     page_title="Volatility Forecast Dashboard",
@@ -46,6 +38,7 @@ def create_metric_card(title, value, suffix=""):
 def get_sp500_analysis():
     """Returns a full analysis of the S&P 500 data from the local Excel file."""
     try:
+        from local_data_processor import load_excel_data, analyze_sp500_data
         df = load_excel_data('data/data_SP500.xlsx', 'S&P 500')
         if df is None:
             return {"error": "Could not load S&P 500 data file."}
@@ -58,6 +51,7 @@ def get_sp500_analysis():
 def get_vix_analysis():
     """Returns a full analysis of the VIX data from the local Excel file."""
     try:
+        from local_data_processor import load_excel_data, analyze_vix_data
         df = load_excel_data('data/data_VIX.xlsx', 'VIX')
         if df is None:
             return {"error": "Could not load VIX data file."}
@@ -70,6 +64,7 @@ def get_vix_analysis():
 def get_ticker_analysis(ticker_symbol: str):
     """Analyzes a given stock ticker using live data from stooq."""
     try:
+        from ticker_analyzer import analyze_ticker
         analysis_result = analyze_ticker(ticker_symbol)
         if analysis_result is None:
             return {"error": f"Could not retrieve data for ticker '{ticker_symbol}'. Is it a valid symbol on stooq?"}
@@ -82,6 +77,7 @@ def get_ticker_analysis(ticker_symbol: str):
 def get_lstm_garch_performance_data():
     """Returns the train/test predictions and actuals from the LSTM-GARCH model."""
     try:
+        from lstm_garch_model import get_lstm_garch_performance_plot
         result = get_lstm_garch_performance_plot()
         if result is None:
             return {"error": "Failed to run LSTM-GARCH model pipeline."}
@@ -94,6 +90,7 @@ def get_lstm_garch_performance_data():
 def get_7_day_forecast():
     """Returns a 7-day ahead volatility forecast from the LSTM-GARCH model."""
     try:
+        from lstm_garch_model import get_7_day_lstm_garch_forecast
         result = get_7_day_lstm_garch_forecast()
         if result is None:
             return {"error": "Failed to generate 7-day forecast."}
@@ -106,6 +103,7 @@ def get_7_day_forecast():
 def get_garch_prediction(forecast_horizon: int = 30):
     """Runs the GARCH(2,2) rolling forecast."""
     try:
+        from garch_model import load_and_prepare_data, run_garch_forecast
         returns = load_and_prepare_data('data/data_SP500.xlsx')
         if returns is None:
             return {"error": "Failed to load data for GARCH model."}
@@ -123,6 +121,7 @@ def get_garch_prediction(forecast_horizon: int = 30):
 def analyze_portfolio_data(portfolio_string: str):
     """Analyzes a portfolio of stocks given a string of tickers and weights."""
     try:
+        from portfolio_analyzer import analyze_portfolio
         analysis_result = analyze_portfolio(portfolio_string)
         if "error" in analysis_result:
             return {"error": analysis_result["error"]}
@@ -167,12 +166,22 @@ def plot_model_performance(chart_data: dict):
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 def plot_stock_returns(chart_data: dict):
+    # Check if data has error or missing required keys
+    if chart_data.get("error") or 'returns_dates' not in chart_data or 'returns_values' not in chart_data:
+        st.error("No valid returns data available for plotting.")
+        return
+        
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=chart_data['returns_dates'], y=chart_data['returns_values'], mode='lines', name='Returns', line=dict(color='#1f77b4')))
     fig.update_layout(title=f"Daily Returns for {chart_data['ticker']}", yaxis_title="Daily Returns (%)", template="plotly_dark", height=500, margin=dict(l=20, r=20, t=60, b=20), plot_bgcolor='rgba(0,0,0,0)', paper_bgcolor='rgba(0,0,0,0)')
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 def plot_stock_volatility(chart_data: dict):
+    # Check if data has error or missing required keys
+    if chart_data.get("error") or 'historical_vol_dates' not in chart_data or 'forecast_dates' not in chart_data:
+        st.error("No valid volatility data available for plotting.")
+        return
+        
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=chart_data['historical_vol_dates'], y=chart_data['historical_vol_values'], mode='lines', name='Historical Volatility', line=dict(color='orange', dash='dot')))
     fig.add_trace(go.Scatter(x=chart_data['forecast_dates'], y=chart_data['forecast_values'], mode='lines+markers', name='Forecasted Volatility', line=dict(color='blue', dash='dot'), marker=dict(size=6)))
@@ -180,6 +189,11 @@ def plot_stock_volatility(chart_data: dict):
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 def plot_stock_forecast_only(chart_data: dict):
+    # Check if data has error or missing required keys
+    if chart_data.get("error") or 'forecast_dates' not in chart_data or 'forecast_values' not in chart_data:
+        st.error("No valid forecast data available for plotting.")
+        return
+        
     fig = go.Figure()
     fig.add_trace(go.Scatter(
         x=chart_data['forecast_dates'],
@@ -240,31 +254,44 @@ def plot_portfolio_volatility(chart_data: dict):
     st.plotly_chart(fig, use_container_width=True, config={'displayModeBar': False})
 
 def plot_volatility_chart(chart_data, title):
+    # Check if data has error or missing required keys
+    if chart_data.get("error"):
+        st.error(f"Error in data: {chart_data['error']}")
+        return
+        
     fig = go.Figure()
     
     # Line 1: Historical Volatility
-    fig.add_trace(go.Scatter(
-        x=chart_data.get('historical_vol_dates'), 
-        y=chart_data.get('historical_vol_values'),
-        mode='lines', name='Historical Volatility',
-        line=dict(color='rgba(255, 255, 255, 0.6)', dash='dot')
-    ))
+    if chart_data.get('historical_vol_dates') and chart_data.get('historical_vol_values'):
+        fig.add_trace(go.Scatter(
+            x=chart_data.get('historical_vol_dates'), 
+            y=chart_data.get('historical_vol_values'),
+            mode='lines', name='Historical Volatility',
+            line=dict(color='rgba(255, 255, 255, 0.6)', dash='dot')
+        ))
     
     # Line 2: In-Sample (Training) Predicted Volatility
-    fig.add_trace(go.Scatter(
-        x=chart_data.get('train_vol_dates'), 
-        y=chart_data.get('train_vol_values'),
-        mode='lines', name='Train Predict (LSTM-GARCH)',
-        line=dict(color='#00CC96') # Green
-    ))
+    if chart_data.get('train_vol_dates') and chart_data.get('train_vol_values'):
+        fig.add_trace(go.Scatter(
+            x=chart_data.get('train_vol_dates'), 
+            y=chart_data.get('train_vol_values'),
+            mode='lines', name='Train Predict (LSTM-GARCH)',
+            line=dict(color='#00CC96') # Green
+        ))
     
     # Line 3: Out-of-Sample (Testing) Predicted Volatility
-    fig.add_trace(go.Scatter(
-        x=chart_data.get('test_vol_dates'), 
-        y=chart_data.get('test_vol_values'),
-        mode='lines', name='Test Predict (LSTM-GARCH)',
-        line=dict(color='#EF553B') # Red
-    ))
+    if chart_data.get('test_vol_dates') and chart_data.get('test_vol_values'):
+        fig.add_trace(go.Scatter(
+            x=chart_data.get('test_vol_dates'), 
+            y=chart_data.get('test_vol_values'),
+            mode='lines', name='Test Predict (LSTM-GARCH)',
+            line=dict(color='#EF553B') # Red
+        ))
+
+    # Check if any traces were added
+    if not fig.data:
+        st.error("No valid volatility data available for plotting.")
+        return
 
     fig.update_layout(
         title=title,
@@ -458,24 +485,31 @@ elif analysis_mode == "Stock Analysis":
             st.session_state['last_analyzed_stock'] = ticker_symbol
     
     if 'stock_analysis_data' in st.session_state and st.session_state.get('stock_analysis_data'):
-        st.markdown(f"---")
-        st.markdown(f"### Showing analysis for **{st.session_state['last_analyzed_stock']}**")
-        view_option = st.selectbox("Select View:", ["Returns", "Volatility", "Implied Volatility"], key='stock_view')
         data = st.session_state['stock_analysis_data']
-
-        if view_option == "Returns":
-            plot_stock_returns(data)
         
-        elif view_option == "Volatility":
-            plot_volatility_chart(data, f"Historical vs. Predicted Volatility for {ticker_symbol}")
+        # Check if there's an error in the data
+        if data.get("error"):
+            st.error(f"Error analyzing {st.session_state['last_analyzed_stock']}: {data['error']}")
+            st.info("💡 **Tip**: Make sure you're using a valid stock ticker symbol (e.g., 'AAPL' for Apple, 'GOOGL' for Google, 'MSFT' for Microsoft)")
+        else:
+            st.markdown(f"---")
+            st.markdown(f"### Showing analysis for **{st.session_state['last_analyzed_stock']}**")
+            view_option = st.selectbox("Select View:", ["Returns", "Volatility", "Implied Volatility"], key='stock_view')
 
-        elif view_option == "Implied Volatility":
-            plot_stock_forecast_only(data)
-            df_forecast = pd.DataFrame({
-                'Date': data['forecast_dates'],
-                'Predicted Daily Volatility (%)': [f"{x:.6f}" for x in data['forecast_values']]
-            })
-            st.dataframe(df_forecast, use_container_width=True, hide_index=True)
+            if view_option == "Returns":
+                plot_stock_returns(data)
+            
+            elif view_option == "Volatility":
+                plot_volatility_chart(data, f"Historical vs. Predicted Volatility for {st.session_state['last_analyzed_stock']}")
+
+            elif view_option == "Implied Volatility":
+                plot_stock_forecast_only(data)
+                if 'forecast_dates' in data and 'forecast_values' in data:
+                    df_forecast = pd.DataFrame({
+                        'Date': data['forecast_dates'],
+                        'Predicted Daily Volatility (%)': [f"{x:.6f}" for x in data['forecast_values']]
+                    })
+                    st.dataframe(df_forecast, use_container_width=True, hide_index=True)
     else:
         st.info("Enter a stock ticker and click 'Analyze'.")
 

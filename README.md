@@ -153,10 +153,6 @@ pip install -r requirements.txt
 
 python test_api.py
 
-# Start the API (Terminal 1)
-
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
-
 # Start the application
 
 python start.py

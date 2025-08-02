@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Stock Volatility Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      .gradient-bg {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      }
+      .card {
+        background: rgba(255, 255, 255, 0.95);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+      .metric-card {
+        transition: transform 0.2s;
+      }
+      .metric-card:hover {
+        transform: translateY(-2px);
+      }
+    </style>
+  </head>
+  <body class="gradient-bg min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+      <!-- Header -->
+      <div class="text-center mb-8">
+        <h1 class="text-4xl font-bold text-white mb-2">📈 Stock Volatility Dashboard</h1>
+        <p class="text-white/80">Real-time financial analysis for your hackathon</p>
+      </div>
+
+      <!-- Controls -->
+      <div class="card rounded-lg p-6 mb-8">
+        <div class="flex flex-wrap gap-4 items-center">
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Stock Symbol</label>
+            <input
+              type="text"
+              id="symbolInput"
+              value="AAPL"
+              class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-gray-700 mb-1">Analysis Type</label>
+            <select
+              id="analysisType"
+              class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="overview">Stock Overview</option>
+              <option value="volatility">Volatility Analysis</option>
+              <option value="market">Market Overview</option>
+            </select>
+          </div>
+          <button
+            onclick="fetchData()"
+            class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+          >
+            Analyze
+          </button>
+          <button
+            onclick="autoRefresh()"
+            id="autoRefreshBtn"
+            class="px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors"
+          >
+            Auto Refresh
+          </button>
+        </div>
+      </div>
+
+      <!-- Loading -->
+      <div id="loading" class="hidden text-center py-8">
+        <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-white"></div>
+        <p class="text-white mt-2">Loading data...</p>
+      </div>
+
+      <!-- Error -->
+      <div id="error" class="hidden card rounded-lg p-6 mb-8">
+        <div class="text-red-600 text-center">
+          <p id="errorMessage"></p>
+        </div>
+      </div>
+
+      <!-- Stock Overview -->
+      <div id="stockOverview" class="hidden">
+        <!-- Key Metrics -->
+        <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-8">
+          <div class="metric-card card rounded-lg p-6 text-center">
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">Current Price</h3>
+            <p id="currentPrice" class="text-3xl font-bold text-blue-600">$0.00</p>
+            <p id="priceChange" class="text-sm text-gray-500">0.00%</p>
+          </div>
+          <div class="metric-card card rounded-lg p-6 text-center">
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">Volatility</h3>
+            <p id="currentVolatility" class="text-3xl font-bold text-red-600">0.0000</p>
+            <p id="volatilityStatus" class="text-sm text-gray-500">Normal</p>
+          </div>
+          <div class="metric-card card rounded-lg p-6 text-center">
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">Volume</h3>
+            <p id="volume" class="text-3xl font-bold text-green-600">0</p>
+            <p class="text-sm text-gray-500">Shares traded</p>
+          </div>
+          <div class="metric-card card rounded-lg p-6 text-center">
+            <h3 class="text-lg font-semibold text-gray-700 mb-2">52W High</h3>
+            <p id="high52w" class="text-3xl font-bold text-purple-600">$0.00</p>
+            <p class="text-sm text-gray-500">Year high</p>
+          </div>
+        </div>
+
+        <!-- Charts -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8 mb-8">
+          <div class="card rounded-lg p-6">
+            <h3 class="text-xl font-semibold text-gray-700 mb-4">Price Chart</h3>
+            <canvas id="priceChart" width="400" height="200"></canvas>
+          </div>
+          <div class="card rounded-lg p-6">
+            <h3 class="text-xl font-semibold text-gray-700 mb-4">Volatility Chart</h3>
+            <canvas id="volatilityChart" width="400" height="200"></canvas>
+          </div>
+        </div>
+
+        <!-- Additional Metrics -->
+        <div class="card rounded-lg p-6">
+          <h3 class="text-xl font-semibold text-gray-700 mb-4">Additional Metrics</h3>
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="text-center">
+              <p class="text-sm text-gray-500">52W Low</p>
+              <p id="low52w" class="text-2xl font-bold text-gray-700">$0.00</p>
+            </div>
+            <div class="text-center">
+              <p class="text-sm text-gray-500">Avg Volatility</p>
+              <p id="avgVolatility" class="text-2xl font-bold text-gray-700">0.0000</p>
+            </div>
+            <div class="text-center">
+              <p class="text-sm text-gray-500">Data Points</p>
+              <p id="dataPoints" class="text-2xl font-bold text-gray-700">0</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Volatility Analysis -->
+      <div id="volatilityAnalysis" class="hidden">
+        <div class="card rounded-lg p-6 mb-8">
+          <h3 class="text-xl font-semibold text-gray-700 mb-4">Volatility Metrics</h3>
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
+            <div class="text-center">
+              <p class="text-sm text-gray-500">Current Volatility</p>
+              <p id="volCurrent" class="text-2xl font-bold text-red-600">0.0000</p>
+            </div>
+            <div class="text-center">
+              <p class="text-sm text-gray-500">Percentile</p>
+              <p id="volPercentile" class="text-2xl font-bold text-blue-600">0%</p>
+            </div>
+            <div class="text-center">
+              <p class="text-sm text-gray-500">Vol of Vol</p>
+              <p id="volOfVol" class="text-2xl font-bold text-purple-600">0.0000</p>
+            </div>
+            <div class="text-center">
+              <p class="text-sm text-gray-500">Trend</p>
+              <p id="volTrend" class="text-2xl font-bold text-green-600">Stable</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Market Overview -->
+      <div id="marketOverview" class="hidden">
+        <div class="card rounded-lg p-6">
+          <h3 class="text-xl font-semibold text-gray-700 mb-4">Market Indices</h3>
+          <div class="grid grid-cols-1 md:grid-cols-4 gap-6" id="marketIndices">
+            <!-- Market data will be populated here -->
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const API_BASE_URL = "http://localhost:8000";
+      let autoRefreshInterval = null;
+      let priceChart = null;
+      let volatilityChart = null;
+
+      async function fetchData() {
+        const symbol = document.getElementById("symbolInput").value.toUpperCase();
+        const analysisType = document.getElementById("analysisType").value;
+
+        showLoading();
+        hideError();
+
+        try {
+          if (analysisType === "overview") {
+            await fetchStockOverview(symbol);
+          } else if (analysisType === "volatility") {
+            await fetchVolatilityAnalysis(symbol);
+          } else if (analysisType === "market") {
+            await fetchMarketOverview();
+          }
+        } catch (error) {
+          showError("Failed to fetch data. Make sure the backend is running.");
+        }
+
+        hideLoading();
+      }
+
+      async function fetchStockOverview(symbol) {
+        const [stockData, chartData] = await Promise.all([
+          fetch(`${API_BASE_URL}/api/stocks/${symbol}`).then((r) => r.json()),
+          fetch(`${API_BASE_URL}/api/stocks/${symbol}/chart`).then((r) => r.json()),
+        ]);
+
+        // Update metrics
+        document.getElementById("currentPrice").textContent = `$${stockData.current_price}`;
+        document.getElementById("priceChange").textContent = `${stockData.price_change_pct.toFixed(2)}%`;
+        document.getElementById("currentVolatility").textContent = stockData.current_volatility.toFixed(4);
+        document.getElementById("volume").textContent = stockData.volume.toLocaleString();
+        document.getElementById("high52w").textContent = `$${stockData.high_52w}`;
+        document.getElementById("low52w").textContent = `$${stockData.low_52w}`;
+        document.getElementById("avgVolatility").textContent = stockData.avg_volatility.toFixed(4);
+        document.getElementById("dataPoints").textContent = stockData.data_points.toLocaleString();
+
+        // Update volatility status
+        const volatilityStatus = document.getElementById("volatilityStatus");
+        if (stockData.current_volatility > stockData.avg_volatility * 1.5) {
+          volatilityStatus.textContent = "High";
+          volatilityStatus.className = "text-sm text-red-500";
+        } else if (stockData.current_volatility < stockData.avg_volatility * 0.7) {
+          volatilityStatus.textContent = "Low";
+          volatilityStatus.className = "text-sm text-green-500";
+        } else {
+          volatilityStatus.textContent = "Normal";
+          volatilityStatus.className = "text-sm text-yellow-500";
+        }
+
+        // Create charts
+        if (chartData) {
+          createPriceChart(chartData);
+          createVolatilityChart(chartData);
+        }
+
+        showSection("stockOverview");
+      }
+
+      async function fetchVolatilityAnalysis(symbol) {
+        const volatilityData = await fetch(`${API_BASE_URL}/api/volatility/${symbol}`).then((r) => r.json());
+
+        document.getElementById("volCurrent").textContent = volatilityData.current_volatility.toFixed(4);
+        document.getElementById("volPercentile").textContent = `${volatilityData.volatility_percentile.toFixed(1)}%`;
+        document.getElementById("volOfVol").textContent = volatilityData.vol_of_vol.toFixed(4);
+        document.getElementById("volTrend").textContent = volatilityData.volatility_trend;
+
+        showSection("volatilityAnalysis");
+      }
+
+      async function fetchMarketOverview() {
+        const marketData = await fetch(`${API_BASE_URL}/api/market/overview`).then((r) => r.json());
+
+        const indices = {
+          "^GSPC": "S&P 500",
+          "^DJI": "Dow Jones",
+          "^IXIC": "NASDAQ",
+          "^VIX": "VIX",
+        };
+
+        const container = document.getElementById("marketIndices");
+        container.innerHTML = "";
+
+        Object.entries(indices).forEach(([symbol, name]) => {
+          const data = marketData[symbol];
+          if (data && !data.error) {
+            const div = document.createElement("div");
+            div.className = "text-center";
+            div.innerHTML = `
+                        <p class="text-sm text-gray-500">${name}</p>
+                        <p class="text-2xl font-bold text-gray-700">$${data.current_price}</p>
+                        <p class="text-sm ${data.price_change_pct >= 0 ? "text-green-600" : "text-red-600"}">
+                            ${data.price_change_pct.toFixed(2)}%
+                        </p>
+                    `;
+            container.appendChild(div);
+          }
+        });
+
+        showSection("marketOverview");
+      }
+
+      function createPriceChart(chartData) {
+        const ctx = document.getElementById("priceChart").getContext("2d");
+
+        if (priceChart) {
+          priceChart.destroy();
+        }
+
+        priceChart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: chartData.dates.slice(-30), // Last 30 days
+            datasets: [
+              {
+                label: "Price",
+                data: chartData.prices.slice(-30),
+                borderColor: "#3b82f6",
+                backgroundColor: "rgba(59, 130, 246, 0.1)",
+                tension: 0.1,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: {
+                display: false,
+              },
+            },
+            scales: {
+              y: {
+                beginAtZero: false,
+              },
+            },
+          },
+        });
+      }
+
+      function createVolatilityChart(chartData) {
+        const ctx = document.getElementById("volatilityChart").getContext("2d");
+
+        if (volatilityChart) {
+          volatilityChart.destroy();
+        }
+
+        volatilityChart = new Chart(ctx, {
+          type: "line",
+          data: {
+            labels: chartData.dates.slice(-30),
+            datasets: [
+              {
+                label: "Volatility",
+                data: chartData.volatility.slice(-30),
+                borderColor: "#ef4444",
+                backgroundColor: "rgba(239, 68, 68, 0.1)",
+                tension: 0.1,
+              },
+            ],
+          },
+          options: {
+            responsive: true,
+            plugins: {
+              legend: {
+                display: false,
+              },
+            },
+            scales: {
+              y: {
+                beginAtZero: true,
+              },
+            },
+          },
+        });
+      }
+
+      function autoRefresh() {
+        const btn = document.getElementById("autoRefreshBtn");
+        if (autoRefreshInterval) {
+          clearInterval(autoRefreshInterval);
+          autoRefreshInterval = null;
+          btn.textContent = "Auto Refresh";
+          btn.className = "px-6 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 transition-colors";
+        } else {
+          autoRefreshInterval = setInterval(fetchData, 30000); // 30 seconds
+          btn.textContent = "Stop Auto Refresh";
+          btn.className = "px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors";
+        }
+      }
+
+      function showLoading() {
+        document.getElementById("loading").classList.remove("hidden");
+      }
+
+      function hideLoading() {
+        document.getElementById("loading").classList.add("hidden");
+      }
+
+      function showError(message) {
+        document.getElementById("errorMessage").textContent = message;
+        document.getElementById("error").classList.remove("hidden");
+      }
+
+      function hideError() {
+        document.getElementById("error").classList.add("hidden");
+      }
+
+      function showSection(sectionId) {
+        // Hide all sections
+        ["stockOverview", "volatilityAnalysis", "marketOverview"].forEach((id) => {
+          document.getElementById(id).classList.add("hidden");
+        });
+
+        // Show selected section
+        document.getElementById(sectionId).classList.remove("hidden");
+      }
+
+      // Initial load
+      document.addEventListener("DOMContentLoaded", () => {
+        fetchData();
+      });
+    </script>
+  </body>
+</html>
